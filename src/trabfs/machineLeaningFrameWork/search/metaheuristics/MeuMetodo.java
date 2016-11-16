@@ -5,7 +5,6 @@
  */
 package trabfs.machineLeaningFrameWork.search.metaheuristics;
 
-import java.util.ArrayList;
 import trabfs.machineLeaningFrameWork.core.AvaliadordeSolucao;
 import trabfs.machineLeaningFrameWork.core.Problema;
 import trabfs.machineLeaningFrameWork.core.Result;
@@ -20,8 +19,7 @@ import weka.core.Debug.Random;
 public class MeuMetodo extends Search{
     private int sizepopulation;
     private double erroMin;
-    
-//    protected Problema p;    
+    private int maxChanges;
     private Solucao best = null;
     private Solucao[] populacao;
     private Solucao[] localBest;
@@ -29,36 +27,48 @@ public class MeuMetodo extends Search{
     
     @Override
     public Result startSearch(Problema p) {
-        //inicializa variaveis
+        //----------------------------------- inicializa variaveis
         //parametro 1: numero de particulas
         //parametro 2: erro minimo
-        //parametro 3: p recebido pelo metodo
-        this.inicializarVariaveis(20, 0.0000000001, p);
+        //parametro 3: numero minimo de iteracoes sem mudanca significativa do erro
+        //parametro 4: p recebido pelo metodo
+        this.inicializarVariaveis(10, 0.0000000001, 20, p);
         
         long t = System.currentTimeMillis();
         
         // ---------------------------------- [inicio do metodo de busca]
         
-        /*
-        TODO:
-        - Verificar condicao de parada - OK?
-        - Verificar o rand - OK
-        - Modularizar - OK
-        */
-        
         //Iniciar as populacoes
         this.start();
         
         //Faz calculo das velocidades e da nova posicao até que mudanca de qualidade seja minima
-        double erro = Double.MAX_VALUE;
-        while(erro > erroMin){
+        double erro;
+        int iteracoes = 0;
+        int mudancas = 0;
+        
+        while(mudancas <= this.maxChanges && iteracoes < 1000){
+            //Guarda melhor solucao antes dessa iteracao pra poder calcular o erro
             Solucao oldBest = new Solucao(best);
             
+            //atualiza posicoes das particulas
             this.atualizarSwarm();
+            
+            //avalia novas posicoes
             this.avaliar();
             
-            //Calcula o fitness
+            //Calcula o erro
             erro = best.getQuality() - oldBest.getQuality();
+            erro = Math.abs(erro);
+            
+            //Verifica se erro é minimo 20 vezes consecutivas
+            if(erro <= this.erroMin){
+                mudancas++;
+            } else {
+                mudancas = 0;
+            }
+            
+            //Atualiza nmr de iteracoes
+            iteracoes++;
         }
             
         // ---------------------------------- [fim do método de busca]
@@ -74,7 +84,7 @@ public class MeuMetodo extends Search{
         return r;
     }
     
-    private void inicializarVariaveis(int sizepopulation, double erroMin, Problema problema){
+    private void inicializarVariaveis(int sizepopulation, double erroMin, int maxChanges, Problema problema){
         this.sizepopulation = sizepopulation;
         this.erroMin = erroMin;
         this.N = problema.getNumAtributos()-1;
@@ -82,6 +92,9 @@ public class MeuMetodo extends Search{
         this.populacao = new Solucao[this.sizepopulation];
         this.localBest = new Solucao[this.sizepopulation];
         this.velocity = new double[this.sizepopulation][this.N];
+        this.maxChanges = maxChanges;
+        this.best = new Solucao(this.N);
+        this.best.initRandom();
     }
     
     
@@ -92,24 +105,21 @@ public class MeuMetodo extends Search{
             populacao[i] = sol;
             localBest[i] = sol;
             
-            if(best == null){
-                best = new Solucao(sol);
-            }
+            this.as.avalia(sol);
             
-            as.avalia(sol);
-            
-            if(sol.getQuality() > best.getQuality()){
+            if(sol.getQuality() > this.best.getQuality()){
                 best = new Solucao(sol);                
             }
         }
     }
 
     private void atualizarSwarm(){
-        Random rand = new Random();
+        //Pesos
+        double e1 = rand();
+        double e2 = rand();
         
-        double c = 2.5;
-        double e1 = rand.nextDouble();
-        double e2 = rand.nextDouble();
+        //Velocidade máxima
+        //Valor indicado por (Kennedy & Eberhat, 1997)
         double vmax = 6;
         
         for (int i = 0; i < this.sizepopulation; i++){
@@ -118,23 +128,27 @@ public class MeuMetodo extends Search{
                 double cognitive;
                 double social;
             
-                cognitive = c * e1 * (localBest[i].get(j) - populacao[i].get(j));
-                social = c * e2 * (best.get(j) - populacao[i].get(j));
+                cognitive = e1 * (localBest[i].get(j) - populacao[i].get(j));
+                social = e2 * (best.get(j) - populacao[i].get(j));
                 
                 velocity[i][j] = velocity[i][j] + cognitive + social;
                 
                 //verifica os limites max e min da velocidade
-                if (Math.abs(velocity[i][j]) > vmax && Math.abs(velocity[i][j]) == velocity[i][j]){
-                    velocity[i][j] = vmax;
-                } else {
-                    velocity[i][j] = -vmax;
+                if (Math.abs(velocity[i][j]) > vmax){
+                    if(velocity[i][j] > 0) {
+                        //upperbound
+                        velocity[i][j] = vmax;
+                    } else {
+                        //lowerbound
+                        velocity[i][j] = -vmax;
+                    }
                 }
                 
                 //calcula o sigmoide (para atualizar posicao corretamente)
                 velocity[i][j] = sigmoid(velocity[i][j]);
                 
                 //atualiza a posicao
-                if(rand.nextDouble() < velocity[i][j]){
+                if(rand() < velocity[i][j]){
                     populacao[i].set(j, 1);
                 } else {
                     populacao[i].set(j, 0);
@@ -164,14 +178,9 @@ public class MeuMetodo extends Search{
         return 1.0/(1.0 + Math.exp(x));
     }
     
-    private int fitness(Solucao s1, Solucao s2){
-        int dist = 0;
-        
-        for(int i =0; i < N; i++){
-            if(s1.get(1) != s2.get(i))
-                dist++;
-        }
-        
-        return dist;
+    // Retorna número real no intervalo [0, 1]
+    private double rand() {
+        Random r = new Random();
+        return 0 + (1 - 0) * r.nextDouble();
     }
 } 
